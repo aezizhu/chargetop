@@ -1,8 +1,8 @@
 class Chargetop < Formula
   desc "Real-time Battery Monitor TUI for macOS"
   homepage "https://github.com/aezizhu/chargetop"
-  url "https://github.com/aezizhu/chargetop/archive/refs/tags/v1.5.0.tar.gz"
-  version "1.5.0"
+  url "https://github.com/aezizhu/chargetop/archive/refs/tags/v1.5.1.tar.gz"
+  version "1.5.1"
   sha256 "0000000000000000000000000000000000000000000000000000000000000000" # Placeholder, update after release
   license "MIT"
   head "https://github.com/aezizhu/chargetop.git", branch: "main"
