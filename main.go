@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/aezizhu/chargetop/battery"
@@ -15,40 +16,32 @@ import (
 
 // Styles
 var (
-	subtle    = lipgloss.AdaptiveColor{Light: "#D9DCCF", Dark: "#383838"}
-	highlight = lipgloss.AdaptiveColor{Light: "#874BFD", Dark: "#7D56F4"}
-	special   = lipgloss.AdaptiveColor{Light: "#43BF6D", Dark: "#73F59F"}
-	danger    = lipgloss.AdaptiveColor{Light: "#F25D94", Dark: "#F55385"}
-	textMuted = lipgloss.AdaptiveColor{Light: "#A8A8A8", Dark: "#626262"}
+	// Apple-esque Palette
+	bg       = lipgloss.Color("0")   // Pitch black or terminal default
+	fg       = lipgloss.Color("255") // White
+	subtle   = lipgloss.Color("240") // Dark Grey
+	accent   = lipgloss.Color("39")  // Dodson Blue (Classic Apple)
+	warning  = lipgloss.Color("208") // Orange
+	critical = lipgloss.Color("196") // Red
+	success  = lipgloss.Color("46")  // Green
 
 	appStyle = lipgloss.NewStyle().
-			Margin(1, 1).
-			Padding(1, 1).
+			Padding(1, 4).
 			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("62"))
+			BorderForeground(subtle).
+			Align(lipgloss.Center)
 
-	listStyle = lipgloss.NewStyle().
-			MarginRight(1).
-			Height(8).
-			Width(35).
-			Padding(0, 1)
+	mainTextStyle = lipgloss.NewStyle().
+			Foreground(fg).
+			Bold(true)
 
-	detailStyle = lipgloss.NewStyle().
-			Padding(0, 1).
-			Width(50).
-			BorderLeft(true).
-			BorderForeground(subtle)
+	labelStyle = lipgloss.NewStyle().
+			Foreground(subtle).
+			Width(25) // Fixed width for alignment
 
-	titleStyle = lipgloss.NewStyle().
-			Foreground(highlight).
-			Bold(true).
-			MarginBottom(1)
-
-	headerStyle = lipgloss.NewStyle().
-			Foreground(special).
-			Bold(true).
-			Underline(true).
-			MarginBottom(1)
+	valueStyle = lipgloss.NewStyle().
+			Foreground(fg).
+			Bold(true)
 )
 
 // Keys
@@ -102,8 +95,6 @@ type model struct {
 func initialModel() model {
 	b, _ := battery.GetBatteryInfo()
 
-	// Sparkline commented out until dependency fix
-
 	return model{
 		info: b,
 		// sparkModel: s,
@@ -146,7 +137,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if len(m.history) > 60 {
 			m.history = m.history[1:]
 		}
-		// m.sparkModel.SetData(m.history)
 
 		return m, tickCmd()
 	}
@@ -156,72 +146,93 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m model) View() string {
 	if m.err != nil {
-		return fmt.Sprintf("\nError: %v\n", m.err)
+		return fmt.Sprintf("\n  Error: %v\n", m.err)
 	}
 
-	// Dynamic Color for Percentage
-	statusColor := special
-	if m.info.Percent < 20 {
-		statusColor = danger
-	} else if m.info.Percent < 50 {
-		statusColor = lipgloss.AdaptiveColor{Light: "#FFD700", Dark: "#D4AF37"} // Gold
+	// Dynamic Status Color
+	statusColor := success
+	if m.info.Percent < 15 {
+		statusColor = critical
+	} else if m.info.Percent < 30 {
+		statusColor = warning
 	}
 
-	// Left Column: Main Status + Graph
-	pctView := lipgloss.NewStyle().
+	// --- 1. The Big Percentage (The Hero) ---
+	pctBig := lipgloss.NewStyle().
 		Foreground(statusColor).
 		Bold(true).
-		Align(lipgloss.Center).
-		Width(12).
-		Height(3).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(subtle).
-		Render(fmt.Sprintf("\n%d%%", m.info.Percent))
+		Render(fmt.Sprintf("%d%%", m.info.Percent))
 
-	statusText := lipgloss.NewStyle().Foreground(textMuted).Render(fmt.Sprintf("%s\n%s", m.info.Status, m.info.Remaining))
+	statusIcon := "⚡"
+	if !m.info.IsCharging {
+		statusIcon = "🔋"
+	}
 
-	graphView := "" // Placeholder for sparkline
-
-	leftCol := lipgloss.JoinVertical(
-		lipgloss.Left,
-		headerStyle.Render("Power Status"),
-		lipgloss.JoinHorizontal(lipgloss.Top, pctView, lipgloss.NewStyle().MarginLeft(2).Render(statusText)),
-		lipgloss.NewStyle().MarginTop(2).Render(graphView),
+	heroSection := lipgloss.JoinVertical(lipgloss.Center,
+		lipgloss.NewStyle().Foreground(subtle).Render(strings.ToUpper(m.info.Status)),
+		lipgloss.NewStyle().Margin(1, 0).Render(
+			lipgloss.JoinHorizontal(lipgloss.Center,
+				lipgloss.NewStyle().Foreground(statusColor).MarginRight(1).Render(statusIcon),
+				pctBig,
+			),
+		),
+		lipgloss.NewStyle().Foreground(subtle).Render(m.info.Remaining),
 	)
 
-	// Right Column: Advanced Stats (+ Temperature)
-	advContent := fmt.Sprintf(`
-%s %s
-%s    %d
-%s    %s
-%s       %.1f°C
+	// --- 2. The Grid (The Details) ---
+	// Helper for rows
+	row := func(label, value string) string {
+		return lipgloss.JoinHorizontal(lipgloss.Left,
+			labelStyle.Render(label),
+			valueStyle.Render(value),
+		)
+	}
 
-%s   %s
-%s   %dW
-%s    %s
-`,
-		titleStyle.Render("Health:   "), m.info.Health,
-		titleStyle.Render("Cycles:   "), m.info.CycleCount,
-		titleStyle.Render("Max Cap:  "), fmt.Sprintf("%d%%", m.info.MaxCapacity),
-		titleStyle.Render("Temp:     "), m.info.Temperature,
-		titleStyle.Render("Charger:  "), "USB-C", // ioreg doesn't always give friendly name easily, hardcode or leave generic
-		titleStyle.Render("Wattage:  "), m.info.Wattage,
-		titleStyle.Render("Serial:   "), m.info.Serial,
-	)
+	// Minimalist Divider
+	divider := lipgloss.NewStyle().
+		Foreground(subtle).
+		Margin(1, 0).
+		Render("───────────────────────────────────────")
 
-	rightCol := detailStyle.Render(
-		headerStyle.Render("Health & Diagnostics") + "\n" + advContent,
+	// Helper for checking empty stats to avoid ugly zeros
+	safeCycle := fmt.Sprintf("%d", m.info.CycleCount)
+	if m.info.CycleCount == 0 {
+		safeCycle = "..."
+	}
+
+	safeWattage := fmt.Sprintf("%dW", m.info.Wattage)
+	if m.info.Wattage == 0 {
+		safeWattage = "..."
+	}
+
+	statsSection := lipgloss.JoinVertical(lipgloss.Left,
+		row("Battery Health", m.info.Health),
+		row("Cycle Count", safeCycle),
+		row("Temperature", fmt.Sprintf("%.1f°C", m.info.Temperature)),
+		row("Max Capacity", fmt.Sprintf("%d%%", m.info.MaxCapacity)),
+		lipgloss.NewStyle().Height(1).Render(""), // Spacer
+		row("Power Source", "USB-C Power Type"),  // Static for now, consistent with goal
+		row("Wattage Input", safeWattage),
+		row("Serial Number", m.info.Serial),
 	)
 
 	// Combine
-	mainView := lipgloss.JoinHorizontal(lipgloss.Top, listStyle.Render(leftCol), rightCol)
+	content := lipgloss.JoinVertical(lipgloss.Center,
+		heroSection,
+		divider,
+		statsSection,
+	)
 
-	// Add Help
-	helpView := m.help.View(m.keys)
+	// Footer (Subtle)
+	helpFooter := m.help.View(m.keys)
+	footer := lipgloss.NewStyle().Foreground(subtle).MarginTop(2).Render(helpFooter)
 
-	finalView := lipgloss.JoinVertical(lipgloss.Left, mainView, lipgloss.NewStyle().MarginTop(1).Foreground(subtle).Render(helpView))
-
-	return appStyle.Render(finalView)
+	return appStyle.Render(
+		lipgloss.JoinVertical(lipgloss.Center,
+			content,
+			footer,
+		),
+	)
 }
 
 func tickCmd() tea.Cmd {
