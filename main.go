@@ -76,7 +76,12 @@ var keys = keyMap{
 	),
 }
 
+// Messages
 type tickMsg time.Time
+type batteryMsg struct {
+	info battery.BatteryInfo
+	err  error
+}
 
 type model struct {
 	info battery.BatteryInfo
@@ -90,22 +95,27 @@ type model struct {
 	width  int
 	height int
 	err    error
+	now    time.Time
 }
 
 func initialModel() model {
+	// Initial fetch is synchronous to populate first frame, or we can start empty
 	b, _ := battery.GetBatteryInfo()
 
 	return model{
-		info: b,
-		// sparkModel: s,
+		info:    b,
 		history: []int{b.Percent},
 		help:    help.New(),
 		keys:    keys,
+		now:     time.Now(),
 	}
 }
 
 func (m model) Init() tea.Cmd {
-	return tickCmd()
+	return tea.Batch(
+		tickCmd(),
+		fetchBatteryCmd(), // Start first fetch immediately
+	)
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -115,10 +125,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, m.keys.Quit):
 			return m, tea.Quit
 		case key.Matches(msg, m.keys.Refresh):
-			b, err := battery.GetBatteryInfo()
-			m.info = b
-			m.err = err
-			return m, nil
+			return m, fetchBatteryCmd()
 		case key.Matches(msg, m.keys.Help):
 			m.help.ShowAll = !m.help.ShowAll
 		}
@@ -129,16 +136,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.help.Width = msg.Width
 
 	case tickMsg:
-		b, err := battery.GetBatteryInfo()
-		m.info = b
-		m.err = err
+		m.now = time.Time(msg)
+		// Every tick, we trigger a fetch in the background
+		return m, tea.Batch(tickCmd(), fetchBatteryCmd())
 
-		m.history = append(m.history, b.Percent)
-		if len(m.history) > 60 {
-			m.history = m.history[1:]
+	case batteryMsg:
+		if msg.err != nil {
+			m.err = msg.err
+		} else {
+			m.info = msg.info
+			m.err = nil
+			m.history = append(m.history, msg.info.Percent)
+			if len(m.history) > 60 {
+				m.history = m.history[1:]
+			}
 		}
-
-		return m, tickCmd()
 	}
 
 	return m, nil
@@ -180,7 +192,6 @@ func (m model) View() string {
 	)
 
 	// --- 2. The Grid (The Details) ---
-	// Helper for rows
 	row := func(label, value string) string {
 		return lipgloss.JoinHorizontal(lipgloss.Left,
 			labelStyle.Render(label),
@@ -194,7 +205,6 @@ func (m model) View() string {
 		Margin(1, 0).
 		Render("───────────────────────────────────────")
 
-	// Helper for checking empty stats to avoid ugly zeros
 	safeCycle := fmt.Sprintf("%d", m.info.CycleCount)
 	if m.info.CycleCount == 0 {
 		safeCycle = "..."
@@ -206,12 +216,12 @@ func (m model) View() string {
 	}
 
 	statsSection := lipgloss.JoinVertical(lipgloss.Left,
-		row("Condition", m.info.Condition), // e.g. "Normal"
+		row("Condition", m.info.Condition),
 		row("Cycle Count", safeCycle),
-		row("Max Capacity", m.info.MaxCapacity), // e.g. "95%"
+		row("Max Capacity", m.info.MaxCapacity),
 		row("Temperature", fmt.Sprintf("%.1f°C", m.info.Temperature)),
-		lipgloss.NewStyle().Height(1).Render(""), // Spacer
-		row("Power Source", "USB-C Power Type"),  // Static for now
+		lipgloss.NewStyle().Height(1).Render(""),
+		row("Power Source", "USB-C Power Type"),
 		row("Wattage Input", safeWattage),
 		row("Serial Number", m.info.Serial),
 	)
@@ -223,9 +233,17 @@ func (m model) View() string {
 		statsSection,
 	)
 
-	// Footer (Subtle)
-	helpFooter := m.help.View(m.keys)
-	footer := lipgloss.NewStyle().Foreground(subtle).MarginTop(2).Render(helpFooter)
+	// Footer (Help + Clock)
+	helpView := m.help.View(m.keys)
+	clockView := lipgloss.NewStyle().Foreground(subtle).Render(m.now.Format("15:04:05"))
+
+	footerRow := lipgloss.JoinHorizontal(lipgloss.Center,
+		helpView,
+		lipgloss.NewStyle().Foreground(subtle).Margin(0, 2).Render("•"),
+		clockView,
+	)
+
+	footer := lipgloss.NewStyle().Foreground(subtle).MarginTop(2).Render(footerRow)
 
 	return appStyle.Render(
 		lipgloss.JoinVertical(lipgloss.Center,
@@ -236,9 +254,16 @@ func (m model) View() string {
 }
 
 func tickCmd() tea.Cmd {
-	return tea.Tick(time.Second*2, func(t time.Time) tea.Msg {
+	return tea.Tick(time.Second*1, func(t time.Time) tea.Msg {
 		return tickMsg(t)
 	})
+}
+
+func fetchBatteryCmd() tea.Cmd {
+	return func() tea.Msg {
+		info, err := battery.GetBatteryInfo()
+		return batteryMsg{info: info, err: err}
+	}
 }
 
 func main() {
