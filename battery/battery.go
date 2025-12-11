@@ -2,12 +2,10 @@ package battery
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"os/exec"
 	"regexp"
 	"strconv"
-	"strings"
 )
 
 type BatteryInfo struct {
@@ -15,136 +13,134 @@ type BatteryInfo struct {
 	Status     string
 	Remaining  string
 	IsCharging bool
-	Source     string
-}
 
-type AdvancedInfo struct {
+	// Advanced Stats
+	Temperature float64 // Celsius
 	CycleCount  int
-	Condition   string
-	MaxCapacity string
-	Wattage     string
-	ChargerName string
+	Condition   string // Good/Normal/etc (Inferred from health)
+	MaxCapacity int
+	Health      string // e.g. "95%" if calculated
+	Wattage     int
 	Serial      string
 }
 
-// SPPowerDataType structure for JSON unmarshalling
-type spPowerData struct {
-	SPPowerDataType []map[string]interface{} `json:"SPPowerDataType"`
-}
-
-func GetBasicInfo() (BatteryInfo, error) {
+func GetBatteryInfo() (BatteryInfo, error) {
 	info := BatteryInfo{
 		Status:    "Unknown",
-		Remaining: "Unknown",
-		Source:    "Unknown",
+		Remaining: "Calculating...",
 	}
 
-	cmd := exec.Command("pmset", "-g", "batt")
+	// 1. Get Basic Info from pmset (it has the best status/remaining logic)
+	// We could parse ioreg for everything, but pmset's time remaining is standard.
+	// Actually, let's parse ioreg for *everything* to be faster and consistent.
+	// ioreg -r -n AppleSmartBattery
+
+	cmd := exec.Command("ioreg", "-r", "-n", "AppleSmartBattery")
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	err := cmd.Run()
 	if err != nil {
 		return info, err
 	}
-
 	output := out.String()
-	lines := strings.Split(strings.TrimSpace(output), "\n")
-	if len(lines) == 0 {
-		return info, fmt.Errorf("no output from pmset")
+
+	// Parse Fields
+
+	// State of Charge
+	// "CurrentCapacity" = 15
+	// "MaxCapacity" = 100
+	// Make sure to match specific keys, as MaxCapacity might appear multiple times.
+	// Using generic "Key" = Value regex
+
+	currentCap := getInt(output, `\"CurrentCapacity\"\s*=\s*(\d+)`)
+	maxCap := getInt(output, `\"MaxCapacity\"\s*=\s*(\d+)`)
+
+	if maxCap > 0 {
+		info.Percent = (currentCap * 100) / maxCap
+		// Overwrite with pmset check if needed, but this is raw controller data
+		// Some people prefer "AppleRawCurrentCapacity" vs "AppleRawMaxCapacity"
 	}
 
-	// Line 1: Source
-	// "Now drawing from 'AC Power'"
-	reSource := regexp.MustCompile(`Now drawing from '([^']+)'`)
-	if matches := reSource.FindStringSubmatch(lines[0]); len(matches) > 1 {
-		info.Source = matches[1]
-	}
-
-	if len(lines) > 1 {
-		detailLine := lines[1]
-		
-		// Percentage
-		rePct := regexp.MustCompile(`(\d+)%`)
-		if matches := rePct.FindStringSubmatch(detailLine); len(matches) > 1 {
-			info.Percent, _ = strconv.Atoi(matches[1])
-		}
-
-		// Status
-		reStatus := regexp.MustCompile(`;\s(.*?);\s`)
-		if matches := reStatus.FindStringSubmatch(detailLine); len(matches) > 1 {
-			info.Status = matches[1]
-			if strings.Contains(info.Status, "charging") || strings.Contains(info.Status, "finishing charge") {
-				info.IsCharging = true
-			}
-		} else if strings.Contains(detailLine, "charged") {
-			info.Status = "charged"
-		}
-
-		// Time Remaining
-		reTime := regexp.MustCompile(`(\d+:\d+)\sremaining`)
-		if matches := reTime.FindStringSubmatch(detailLine); len(matches) > 1 {
-			info.Remaining = matches[1]
-		} else if strings.Contains(detailLine, "no estimate") {
-			info.Remaining = "Calculating..."
+	// Use regex to find IsCharging
+	// "IsCharging" = Yes
+	if getString(output, `\"IsCharging\"\s*=\s*(Yes|No)`) == "Yes" {
+		info.IsCharging = true
+		info.Status = "Charging"
+	} else {
+		info.IsCharging = false
+		info.Status = "Discharging"
+		if getString(output, `\"FullyCharged\"\s*=\s*(Yes)`) == "Yes" {
+			info.Status = "Charged"
 		}
 	}
+
+	// Time Remaining
+	// "TimeRemaining" = 177 (minutes)
+	tr := getInt(output, `\"TimeRemaining\"\s*=\s*(\d+)`)
+	if tr < 65535 {
+		h := tr / 60
+		m := tr % 60
+		info.Remaining = fmt.Sprintf("%d:%02d remaining", h, m)
+	} else {
+		info.Remaining = "Calculating..." // 65535 often means calculating
+		if info.Status == "Charged" {
+			info.Remaining = ""
+		}
+	}
+
+	// Temperature
+	// "Temperature" = 3040 (centidegrees)
+	temp := getInt(output, `\"Temperature\"\s*=\s*(\d+)`)
+	if temp > 0 {
+		info.Temperature = float64(temp) / 100.0
+	}
+
+	// CycleCount
+	// "CycleCount" = 193
+	info.CycleCount = getInt(output, `\"CycleCount\"\s*=\s*(\d+)`)
+
+	// Watts
+	// "Watts"=60 (inside AdapterDetails)
+	info.Wattage = getInt(output, `\"Watts\"=(\d+)`)
+
+	// Serial
+	// "Serial" = "F8..."
+	info.Serial = getString(output, `\"Serial\"\s*=\s*\"([^\"]+)\"`)
+
+	// Design Cap for Health Calcs
+	// "DesignCapacity" = 8579
+	designCap := getInt(output, `\"DesignCapacity\"\s*=\s*(\d+)`)
+	appleRawMax := getInt(output, `\"AppleRawMaxCapacity\"\s*=\s*(\d+)`)
+
+	if designCap > 0 && appleRawMax > 0 {
+		healthPct := (float64(appleRawMax) / float64(designCap)) * 100
+		info.Health = fmt.Sprintf("%.0f%%", healthPct)
+	}
+
+	info.MaxCapacity = maxCap // This is relative max capacity (wear info is mostly in AppleRawMax vs Design)
+
+	// Condition (Hard to map exactly without system_profiler strings, but we can infer)
+	// Or just leave blank if we rely on system_profiler.
+	// Let's stick to "Health" % which is more useful.
 
 	return info, nil
 }
 
-func GetAdvancedInfo() (AdvancedInfo, error) {
-	info := AdvancedInfo{
-		Condition:   "N/A",
-		MaxCapacity: "N/A",
-		Wattage:     "N/A",
-		ChargerName: "N/A",
-		Serial:      "N/A",
+func getInt(text string, pattern string) int {
+	re := regexp.MustCompile(pattern)
+	matches := re.FindStringSubmatch(text)
+	if len(matches) > 1 {
+		val, _ := strconv.Atoi(matches[1])
+		return val
 	}
+	return 0
+}
 
-	cmd := exec.Command("system_profiler", "SPPowerDataType", "-json")
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	err := cmd.Run()
-	if err != nil {
-		return info, err
+func getString(text string, pattern string) string {
+	re := regexp.MustCompile(pattern)
+	matches := re.FindStringSubmatch(text)
+	if len(matches) > 1 {
+		return matches[1]
 	}
-
-	var data spPowerData
-	if err := json.Unmarshal(out.Bytes(), &data); err != nil {
-		return info, err
-	}
-
-	for _, item := range data.SPPowerDataType {
-		// Battery Info
-		if battInfo, ok := item["spbattery_information"].(map[string]interface{}); ok {
-			if healthInfo, ok := battInfo["sppower_battery_health_info"].(map[string]interface{}); ok {
-				if cycles, ok := healthInfo["sppower_battery_cycle_count"].(float64); ok {
-					info.CycleCount = int(cycles)
-				}
-				if cond, ok := healthInfo["sppower_battery_health"].(string); ok {
-					info.Condition = cond
-				}
-				if maxCap, ok := healthInfo["sppower_battery_health_maximum_capacity"].(string); ok {
-					info.MaxCapacity = maxCap
-				}
-			}
-			if modelInfo, ok := battInfo["sppower_battery_model_info"].(map[string]interface{}); ok {
-				if serial, ok := modelInfo["sppower_battery_serial_number"].(string); ok {
-					info.Serial = serial
-				}
-			}
-		}
-
-		// Charger Info
-		if chargerInfo, ok := item["sppower_ac_charger_information"].(map[string]interface{}); ok {
-			if watts, ok := chargerInfo["sppower_ac_charger_watts"].(string); ok {
-				info.Wattage = watts
-			}
-			if name, ok := chargerInfo["sppower_ac_charger_name"].(string); ok {
-				info.ChargerName = name
-			}
-		}
-	}
-
-	return info, nil
+	return ""
 }

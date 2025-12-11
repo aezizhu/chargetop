@@ -84,11 +84,9 @@ var keys = keyMap{
 }
 
 type tickMsg time.Time
-type advTickMsg time.Time
 
 type model struct {
-	basic    battery.BatteryInfo
-	advanced battery.AdvancedInfo
+	info battery.BatteryInfo
 
 	// sparkModel sparkline.Model
 	history []int
@@ -102,31 +100,21 @@ type model struct {
 }
 
 func initialModel() model {
-	b, _ := battery.GetBasicInfo()
+	b, _ := battery.GetBatteryInfo()
 
-	/*
-		s := sparkline.New(
-			sparkline.WithWidth(35),
-			sparkline.WithHeight(3),
-			sparkline.WithLabel("Charge History (60 min)"),
-			sparkline.WithLineColor(special),
-		)
-	*/
+	// Sparkline commented out until dependency fix
 
 	return model{
-		basic: b,
+		info: b,
 		// sparkModel: s,
-		history: []int{b.Percent}, // Start with current
+		history: []int{b.Percent},
 		help:    help.New(),
 		keys:    keys,
 	}
 }
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(
-		tickCmd(),
-		advTickCmd(),
-	)
+	return tickCmd()
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -136,8 +124,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, m.keys.Quit):
 			return m, tea.Quit
 		case key.Matches(msg, m.keys.Refresh):
-			b, err := battery.GetBasicInfo()
-			m.basic = b
+			b, err := battery.GetBatteryInfo()
+			m.info = b
 			m.err = err
 			return m, nil
 		case key.Matches(msg, m.keys.Help):
@@ -150,26 +138,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.help.Width = msg.Width
 
 	case tickMsg:
-		b, err := battery.GetBasicInfo()
-		m.basic = b
+		b, err := battery.GetBatteryInfo()
+		m.info = b
 		m.err = err
 
-		// Update history logic
 		m.history = append(m.history, b.Percent)
-		// Keep last 60 points (assuming 1 per minute roughly or just recent ticks)
 		if len(m.history) > 60 {
 			m.history = m.history[1:]
 		}
 		// m.sparkModel.SetData(m.history)
 
 		return m, tickCmd()
-
-	case advTickMsg:
-		a, err := battery.GetAdvancedInfo()
-		if err == nil {
-			m.advanced = a
-		}
-		return m, advTickCmd()
 	}
 
 	return m, nil
@@ -182,10 +161,10 @@ func (m model) View() string {
 
 	// Dynamic Color for Percentage
 	statusColor := special
-	if m.basic.Percent < 20 {
+	if m.info.Percent < 20 {
 		statusColor = danger
-	} else if m.basic.Percent < 50 {
-		statusColor = lipgloss.AdaptiveColor{Light: "#FFD700", Dark: "#D4AF37"} // Gold/Yellow
+	} else if m.info.Percent < 50 {
+		statusColor = lipgloss.AdaptiveColor{Light: "#FFD700", Dark: "#D4AF37"} // Gold
 	}
 
 	// Left Column: Main Status + Graph
@@ -197,21 +176,11 @@ func (m model) View() string {
 		Height(3).
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(subtle).
-		Render(fmt.Sprintf("\n%d%%", m.basic.Percent))
+		Render(fmt.Sprintf("\n%d%%", m.info.Percent))
 
-	statusText := lipgloss.NewStyle().Foreground(textMuted).Render(fmt.Sprintf("%s\n%s", m.basic.Status, m.basic.Remaining))
+	statusText := lipgloss.NewStyle().Foreground(textMuted).Render(fmt.Sprintf("%s\n%s", m.info.Status, m.info.Remaining))
 
-	// Sparkline color update
-	// m.sparkModel.Data = m.history // Refresh data safely
-	/*
-		if m.basic.IsCharging {
-			m.sparkModel.LineColor = highlight
-		} else {
-			m.sparkModel.LineColor = statusColor
-		}
-		graphView := m.sparkModel.View()
-	*/
-	graphView := ""
+	graphView := "" // Placeholder for sparkline
 
 	leftCol := lipgloss.JoinVertical(
 		lipgloss.Left,
@@ -220,22 +189,24 @@ func (m model) View() string {
 		lipgloss.NewStyle().MarginTop(2).Render(graphView),
 	)
 
-	// Right Column: Advanced Stats
+	// Right Column: Advanced Stats (+ Temperature)
 	advContent := fmt.Sprintf(`
 %s %s
 %s    %d
-%s   %s
+%s    %s
+%s       %.1f°C
 
 %s   %s
-%s   %s
+%s   %dW
 %s    %s
 `,
-		titleStyle.Render("Condition:"), m.advanced.Condition,
-		titleStyle.Render("Cycles:   "), m.advanced.CycleCount,
-		titleStyle.Render("Max Cap:  "), m.advanced.MaxCapacity,
-		titleStyle.Render("Charger:  "), m.advanced.ChargerName,
-		titleStyle.Render("Wattage:  "), m.advanced.Wattage,
-		titleStyle.Render("Serial:   "), m.advanced.Serial,
+		titleStyle.Render("Health:   "), m.info.Health,
+		titleStyle.Render("Cycles:   "), m.info.CycleCount,
+		titleStyle.Render("Max Cap:  "), fmt.Sprintf("%d%%", m.info.MaxCapacity),
+		titleStyle.Render("Temp:     "), m.info.Temperature,
+		titleStyle.Render("Charger:  "), "USB-C", // ioreg doesn't always give friendly name easily, hardcode or leave generic
+		titleStyle.Render("Wattage:  "), m.info.Wattage,
+		titleStyle.Render("Serial:   "), m.info.Serial,
 	)
 
 	rightCol := detailStyle.Render(
@@ -256,12 +227,6 @@ func (m model) View() string {
 func tickCmd() tea.Cmd {
 	return tea.Tick(time.Second*2, func(t time.Time) tea.Msg {
 		return tickMsg(t)
-	})
-}
-
-func advTickCmd() tea.Cmd {
-	return tea.Tick(time.Minute*1, func(t time.Time) tea.Msg {
-		return advTickMsg(t)
 	})
 }
 
