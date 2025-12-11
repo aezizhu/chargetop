@@ -16,14 +16,15 @@ import (
 
 // Styles
 var (
-	// Apple-esque Palette
-	bg       = lipgloss.Color("0")   // Pitch black or terminal default
-	fg       = lipgloss.Color("255") // White
-	subtle   = lipgloss.Color("240") // Dark Grey
-	accent   = lipgloss.Color("39")  // Dodson Blue (Classic Apple)
-	warning  = lipgloss.Color("208") // Orange
-	critical = lipgloss.Color("196") // Red
-	success  = lipgloss.Color("46")  // Green
+	// Adaptive Palette (Works on Light & Dark themes)
+	fg     = lipgloss.AdaptiveColor{Light: "#000000", Dark: "#FFFFFF"}
+	subtle = lipgloss.AdaptiveColor{Light: "#666666", Dark: "#999999"}
+
+	// Status Colors
+	accent   = lipgloss.AdaptiveColor{Light: "#007AFF", Dark: "#0A84FF"} // Apple Blue
+	warning  = lipgloss.AdaptiveColor{Light: "#FF9500", Dark: "#FF9F0A"} // Apple Orange
+	critical = lipgloss.AdaptiveColor{Light: "#FF3B30", Dark: "#FF453A"} // Apple Red
+	success  = lipgloss.AdaptiveColor{Light: "#34C759", Dark: "#30D158"} // Apple Green
 
 	appStyle = lipgloss.NewStyle().
 			Padding(1, 4).
