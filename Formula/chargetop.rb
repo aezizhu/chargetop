@@ -4,7 +4,7 @@ class Chargetop < Formula
   url "https://github.com/aezizhu/chargetop/archive/refs/tags/v1.5.1.tar.gz"
   version "1.5.1"
   sha256 "0000000000000000000000000000000000000000000000000000000000000000" # Placeholder, update after release
-  license "MIT"
+  license "Apache-2.0"
   head "https://github.com/aezizhu/chargetop.git", branch: "main"
 
   depends_on "go" => :build
