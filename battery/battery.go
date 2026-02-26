@@ -111,7 +111,7 @@ func GetBatteryInfo() (BatteryInfo, error) {
 	// Temperature & Watts
 	temp := getInt(output, `\"Temperature\"\s*=\s*(\d+)`)
 	info.Temperature = float64(temp) / 100.0
-	info.Wattage = getInt(output, `\"Watts\"=(\d+)`)
+	info.Wattage = getInt(output, `\"Watts\"\s*=\s*(\d+)`)
 	info.Serial = getString(output, `\"Serial\"\s*=\s*\"([^\"]+)\"`)
 
 	return info, nil

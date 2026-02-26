@@ -14,6 +14,6 @@ class Chargetop < Formula
   end
 
   test do
-    assert_match "battery-mon", shell_output("#{bin}/battery-mon --help", 1)
+    assert_match "chargetop", shell_output("#{bin}/chargetop --help", 1)
   end
 end

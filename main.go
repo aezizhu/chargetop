@@ -222,7 +222,7 @@ func (m model) View() string {
 		row("Max Capacity", m.info.MaxCapacity),
 		row("Temperature", fmt.Sprintf("%.1f°C", m.info.Temperature)),
 		lipgloss.NewStyle().Height(1).Render(""),
-		row("Power Source", "USB-C Power Type"),
+		row("Power Source", m.info.Status),
 		row("Wattage Input", safeWattage),
 		row("Serial Number", m.info.Serial),
 	)
@@ -270,6 +270,6 @@ func fetchBatteryCmd() tea.Cmd {
 func main() {
 	p := tea.NewProgram(initialModel(), tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
-		fmt.Printf("Error: %v", err)
+		fmt.Printf("Error: %v\n", err)
 	}
 }
